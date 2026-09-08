@@ -6,6 +6,7 @@ Created on Mon Apr  1 16:03:39 2024
 @author: yunda_si
 """
 
+import copy
 import torch
 from torch import nn
 import math
@@ -32,7 +33,6 @@ class Attn(nn.Module):
         self.scaling = self.head_dim ** -0.5
         self.is_causal = is_causal
         self.tied_attn = tied_attn
-        self.attn_shape = 'bhij'
 
         self.norm = nn.RMSNorm(in_channels)
         self.linear_q = nn.Linear(in_channels, in_channels, bias=False)
@@ -48,14 +48,14 @@ class Attn(nn.Module):
     def cal_attn(self, q, k, v, scale, attn_bias):
 
         q *= scale
-        attn_weights = torch.einsum(f'bhic,bhjc -> {self.attn_shape}', q, k)
+        attn_weights = torch.einsum(f'bhic,bhjc -> bhij', q, k)
         if attn_bias is not None:
-            attn_weights = attn_weights + attn_bias
+            attn_weights += attn_bias
 
         attn_prob = attn_weights.softmax(-1)
         attn_prob = self.dropout_attn(attn_prob)
 
-        output = torch.einsum(f'{self.attn_shape}, bhjc -> bhic', attn_prob, v)
+        output = torch.einsum(f'bhij, bhjc -> bhic', attn_prob, v)
 
         return output
 
@@ -73,12 +73,6 @@ class Attn(nn.Module):
         q = self.linear_q(x)
         k = self.linear_k(x)
         v = self.linear_v(x)
-        g = self.sigmoid(self.gate(x))
-
-        if self.tied_attn:
-            scale = self.scaling / math.sqrt(num_row)
-        else:
-            scale = self.scaling
 
         if attn_bias is not None:
             q = q * (2 ** -0.5)
@@ -87,10 +81,9 @@ class Attn(nn.Module):
         q = q.view(comb_batch, num_column, self.nhead, self.head_dim)
         k = k.view(comb_batch, num_column, self.nhead, self.head_dim)
         v = v.view(comb_batch, num_column, self.nhead, self.head_dim)
-        g = g.view(comb_batch, num_column, self.nhead, self.head_dim)
 
         if attn_bias is not None:
-            if num_row>24 and num_column>24:
+            if num_row>24 or num_column>24:
                 output = DSAttn(q.unflatten(0,(batch,num_row)), k.unflatten(0,(batch,num_row)), v.unflatten(0,(batch,num_row)), [None, attn_bias.unflatten(0,(batch,1))])
                 output = output.flatten(0,1)
             else:
@@ -109,12 +102,12 @@ class Attn(nn.Module):
                                      dropout_p=0.0,
                                      causal=self.is_causal)
 
+        g = self.sigmoid(self.gate(x))
+        g = g.view(comb_batch, num_column, self.nhead, self.head_dim)
         output = g * output
-        output = output.contiguous().view(comb_batch, num_column, self.in_channels)
-        output = self.linear_ff(output)
+        output = output.view(comb_batch, num_column, self.in_channels).contiguous()
 
-        return torch.unflatten(self.dropout_module(output),0,(batch, num_row))
-
+        return torch.unflatten(self.dropout_module(self.linear_ff(output)),0,(batch, num_row))
 
 
 class FeedForwardNetwork(nn.Module):
@@ -154,11 +147,13 @@ class TriangularMultiplicative(nn.Module):
             in_channels,
             scalen=1,
             dropout_p2d=0.1,
+            split_res=None,
     ):
 
         super(TriangularMultiplicative, self).__init__()
 
         hidden_channels = in_channels*scalen
+        self.split_res = split_res
 
         self.norm1 = nn.RMSNorm(in_channels)
         self.linear_left = nn.Linear(in_channels, hidden_channels)
@@ -172,26 +167,29 @@ class TriangularMultiplicative(nn.Module):
         self.linear_out = nn.Linear(hidden_channels, in_channels)
 
         self.dropout_module = nn.Dropout(p=dropout_p2d)
-
         self.act = nn.Sigmoid()
 
-        for gate in (self.gate_left, self.gate_right, self.gate_out):
-            nn.init.constant_(gate.weight, 0.0)
-            nn.init.constant_(gate.bias, 1.0)
 
     def forward(self, pair, mode='outgoing'):
-
 
         pair = self.norm1(pair)
 
         left = self.act(self.gate_left(pair)) * self.linear_left(pair)
         right = self.act(self.gate_right(pair)) * self.linear_right(pair)
-        gate = self.act(self.gate_out(pair))
+        out = self.act(self.gate_out(pair))
 
         if mode == 'outgoing':
-            out = gate * self.linear_out(self.norm2(torch.einsum('bilc, bjlc -> bijc', left, right)))
+            if self.split_res is not None:
+                for idx in range(math.ceil(pair.shape[1] / self.split_res)):
+                    out[:,idx*self.split_res:(idx+1)*self.split_res] *= self.linear_out(self.norm2(torch.einsum('bilc, bjlc -> bijc', left[:,idx*self.split_res:(idx+1)*self.split_res], right)))
+            else:
+                out *= self.linear_out(self.norm2(torch.einsum('bilc, bjlc -> bijc', left, right)))
         else:
-            out = gate * self.linear_out(self.norm2(torch.einsum('blic, bljc -> bijc', left, right)))
+            if self.split_res is not None:
+                for idx in range(math.ceil(pair.shape[1] / self.split_res)):
+                    out[:,idx*self.split_res:(idx+1)*self.split_res] *= self.linear_out(self.norm2(torch.einsum('blic, bljc -> bijc', left[:,:,idx*self.split_res:(idx+1)*self.split_res], right)))
+            else:
+                out *= self.linear_out(self.norm2(torch.einsum('blic, bljc -> bijc', left, right)))
 
         return self.dropout_module(out)
 
@@ -206,6 +204,7 @@ class AxialFormer(nn.Module):
                  is_causal=False,
                  with_column_attn=True,
                  split_seq=None,
+                 split_res=None,
                  ):
 
         super(AxialFormer, self).__init__()
@@ -214,37 +213,52 @@ class AxialFormer(nn.Module):
         self.nhead = nhead
         self.with_column_attn = with_column_attn
         self.split_seq = split_seq
+        self.split_res = split_res
 
-        self.row_attn = Attn(in_channels=self.in_channel,
+        self.row_attn = Attn(
+                             in_channels=self.in_channel,
                              nhead=self.nhead,
                              dropout_p=dropout_p,
                              is_causal=is_causal,
-                             tied_attn=tied_attn)
+                             tied_attn=tied_attn
+                             )
 
         if self.with_column_attn:
-            self.column_attn = Attn(in_channels=self.in_channel,
+            self.column_attn = Attn(
+                                    in_channels=self.in_channel,
                                     nhead=self.nhead,
                                     dropout_p=dropout_p,
                                     is_causal=is_causal,
-                                    tied_attn=tied_attn)
+                                    tied_attn=tied_attn
+                                    )
 
-        self.ffn = FeedForwardNetwork(in_channels=self.in_channel,
+        self.ffn = FeedForwardNetwork(
+                                      in_channels=self.in_channel,
                                       dropout_p=dropout_p,
                                       )
 
     def forward(self, x, row_bias=None, column_bias=None):
 
-        for idx in range(math.ceil(x.shape[1] / self.split_seq)):
-            x[:, idx * self.split_seq:(idx + 1) * self.split_seq] += self.row_attn(x[:, idx * self.split_seq:(idx + 1) * self.split_seq], row_bias)
+        if self.split_res is not None:
+            for idx in range(math.ceil(x.shape[1] / self.split_res)):
+                x[:, idx * self.split_res:(idx + 1) * self.split_res] += self.row_attn(x[:, idx * self.split_res:(idx + 1) * self.split_res], row_bias)
+        else:
+            x += self.row_attn(x, row_bias)
 
         if self.with_column_attn:
             x = x.transpose(1, 2)
-            for idx in range(math.ceil(x.shape[1] / self.split_seq)):
-                x[:, idx * self.split_seq:(idx + 1) * self.split_seq] += self.column_attn(x[:, idx * self.split_seq:(idx + 1) * self.split_seq], column_bias)
+            if self.split_seq is not None:
+                for idx in range(math.ceil(x.shape[1] / self.split_seq)):
+                    x[:, idx * self.split_seq:(idx + 1) * self.split_seq] += self.column_attn(x[:, idx * self.split_seq:(idx + 1) * self.split_seq], column_bias)
+            else:
+                x += self.column_attn(x, column_bias)
             x = x.transpose(1, 2)
 
-        for idx in range(math.ceil(x.shape[1] / self.split_seq)):
-            x[:, idx * self.split_seq:(idx + 1) * self.split_seq] += self.ffn(x[:, idx * self.split_seq:(idx + 1) * self.split_seq])
+        if self.split_res is not None:
+            for idx in range(math.ceil(x.shape[1] / self.split_res)):
+                x[:, idx * self.split_res:(idx + 1) * self.split_res] += self.ffn(x[:, idx * self.split_res:(idx + 1) * self.split_res])
+        else:
+            x += self.ffn(x)
 
         return x
 
@@ -280,21 +294,20 @@ class TransMSA(nn.Module):
                  hidden_channel=32,
                  pair_channel=128,
                  dropout_p=0.1,
-                 split_seq=None,
+                 split_res=None,
                  outnorm=False,
                  ):
 
         super(TransMSA, self).__init__()
 
-        self.split_seq = split_seq
+        self.split_res = split_res
+        self.outnorm = outnorm
 
         self.norm = nn.RMSNorm(msa_channel)
-
         self.linear1 = nn.Linear(msa_channel, hidden_channel, bias=True)
         self.linear2 = nn.Linear(msa_channel, hidden_channel, bias=True)
         self.linear3 = nn.Linear(hidden_channel ** 2, pair_channel, bias=True)
 
-        self.outnorm = outnorm
         if outnorm:
             self.norm2 = nn.RMSNorm(pair_channel)
 
@@ -302,24 +315,24 @@ class TransMSA(nn.Module):
 
     def _opm(self, a, b):
 
-        batch_size, num_row, num_column, c = a.shape
-
         outer = torch.einsum("...mbc,...mde->...bdce", a, b)# / num_row
-        outer = outer.reshape(outer.shape[:-2] + (-1,))
 
-        return outer
+        return outer.reshape(outer.shape[:-2] + (-1,))
 
     def forward(self, msa):
         batch_size, num_row, num_column, c = msa.shape
 
-        if self.split_seq is not None:
+        msa = self.norm(msa)
+        if self.split_res is not None:
             pair = 0
-            for x in torch.split(msa, self.split_seq, dim=1):
-                x = self.norm(x)
-
+            for x in torch.split(msa, self.split_res, dim=1):
                 left = self.linear1(x)
                 right = self.linear2(x)  # b, num_aa, num_seq, channel
                 pair += self._opm(left, right)
+        else:
+            left = self.linear1(msa)
+            right = self.linear2(msa)  # b, num_aa, num_seq, channel
+            pair = self._opm(left, right)
         pair = self.linear3(pair/num_row)
         if self.outnorm:
             pair = self.norm2(pair)
@@ -339,16 +352,18 @@ class Evoformer(nn.Module):
                  with_column_attn=False,
                  tied_attn=False,
                  split_seq=None,
+                 split_res=None,
                  is_causal=False):
 
         super(Evoformer, self).__init__()
 
         self.split_seq = split_seq
+        self.split_res = split_res
 
         self.transmsa = TransMSA(msa_channel=msa_channel,
                                  pair_channel=pair_channel,
                                  dropout_p=dropout_p,
-                                 split_seq=split_seq,
+                                 split_res=split_res,
                                  outnorm=False)
 
         self.transpair = Transpair(in_channel=pair_channel,
@@ -357,10 +372,12 @@ class Evoformer(nn.Module):
                                    )
 
         self.multi_outgoing = TriangularMultiplicative(in_channels=pair_channel,
-                                                       dropout_p2d=dropout_p2d)
+                                                       dropout_p2d=dropout_p2d,
+                                                       split_res=split_res)
 
         self.multi_incoming = TriangularMultiplicative(in_channels=pair_channel,
-                                                       dropout_p2d=dropout_p2d)
+                                                       dropout_p2d=dropout_p2d,
+                                                       split_res=split_res)
 
         self.triangle_startnode = Attn(in_channels=pair_channel,
                                        nhead=pair_nhead,
@@ -388,38 +405,48 @@ class Evoformer(nn.Module):
                                            dropout_p=dropout_p2d,
                                            )
 
-
         self.axial = AxialFormer(in_channel=msa_channel,
                                  nhead=msa_nhead,
                                  dropout_p=dropout_p,
                                  tied_attn=tied_attn,
                                  is_causal=is_causal,
                                  with_column_attn=with_column_attn,
+                                 split_res=split_res,
                                  split_seq=split_seq,
                                  )
 
-    def forward(self, msa, pair, msa_bias=None, row_mask=None, column_mask=None):
+    def forward(self, msa, pair, msa_bias=None):
 
         if msa_bias is None:
-            b,n,l,c = msa.shape
-            pair_bias = self.transpair(pair)
+            msa = self.axial(msa, row_bias=self.transpair(pair))
+            pair += self.transmsa(msa)
 
-            msa = self.axial(msa, row_bias=pair_bias)
-            msa_bias = self.transmsa(msa)
-
-        pair += msa_bias
         pair += self.multi_outgoing(pair)
         pair += self.multi_incoming(pair, 'incoming')
 
         pair_bias = self.bias_startnode(pair)
-        pair += self.triangle_startnode(pair, pair_bias)
+        if self.split_res is not None:
+            for idx in range(math.ceil(pair.shape[1] / self.split_res)):
+                pair[:, idx*self.split_res:(idx+1)*self.split_res] += self.triangle_startnode(pair[:, idx*self.split_res:(idx+1)*self.split_res],
+                                                                                                    pair_bias)
+        else:
+            pair += self.triangle_startnode(pair, pair_bias)
 
         pair_bias = self.bias_endnode(pair).transpose(-2, -1)
-        pair += self.triangle_endnode(pair.transpose(1,2), pair_bias).transpose(1,2)
+        pair = pair.transpose(1,2)
+        if self.split_res is not None:
+            for idx in range(math.ceil(pair.shape[1] / self.split_res)):
+                pair[:, idx*self.split_res:(idx+1)*self.split_res] += self.triangle_endnode(pair[:, idx*self.split_res:(idx+1)*self.split_res],
+                                                                                                    pair_bias)
+        else:
+            pair += self.triangle_endnode(pair, pair_bias)
+        pair = pair.transpose(1, 2)
 
-
-        for idx in range(math.ceil(pair.shape[1] / self.split_seq)):
-            pair[:, idx * self.split_seq:(idx + 1) * self.split_seq] += self.pair_ffn(pair[:, idx * self.split_seq:(idx + 1) * self.split_seq])
+        if self.split_res is not None:
+            for idx in range(math.ceil(pair.shape[1] / self.split_res)):
+                pair[:, idx * self.split_res:(idx + 1) * self.split_res] += self.pair_ffn(pair[:, idx * self.split_res:(idx + 1) * self.split_res])
+        else:
+            pair += self.pair_ffn(pair)
 
         return msa, pair
 
@@ -430,13 +457,13 @@ class MSA2ATOM(nn.Module):
                  msa_channel=128,
                  atom_channel=128,
                  num_atom=37,
-                 split_seq=None,
+                 split_res=None,
                  ):
         super(MSA2ATOM, self).__init__()
 
         self.atom_channel = atom_channel
         self.num_atom = num_atom
-        self.split_seq = split_seq
+        self.split_res = split_res
 
         self.linear1 = nn.Linear(msa_channel, atom_channel, bias=True)
         self.linear2 = nn.Linear(msa_channel, num_atom, bias=False)
@@ -446,9 +473,9 @@ class MSA2ATOM(nn.Module):
 
     def forward(self, msa):
 
-        if self.split_seq is not None:
+        if self.split_res is not None:
             full_out = []
-            for x in torch.split(msa, self.split_seq, dim=2):
+            for x in torch.split(msa, self.split_res, dim=2):
                 x = self.norm(x)
                 left = self.linear1(x)
                 right = torch.softmax(self.linear2(x), 1)
@@ -506,21 +533,16 @@ class InputEmbedder(nn.Module):
         self.embed_seq = nn.Embedding(nums_aa, pair_channel)
         self.embd_pos = nn.Embedding(nums_posclass, pair_channel)
 
-    def forward(self, protein, requare_pair=True):
+    def forward(self, protein):
         msa_init = protein['label_msa'].unsqueeze(0)
         seq_init = msa_init[:, 0]
         msa_init = self.embed_msa(msa_init)
 
-        if requare_pair:
-            seq_init = self.embed_seq(seq_init)
-            seq_init = seq_init.unsqueeze(1) + seq_init.unsqueeze(2)
+        seq_init = self.embed_seq(seq_init)
+        pair_init = seq_init.unsqueeze(1) + seq_init.unsqueeze(2)
 
-            idx = self.relpos(protein['sel_idx']).to(msa_init.device)
-            idx = self.embd_pos(idx).unsqueeze(0)
-
-            pair_init = idx + seq_init
-        else:
-            pair_init = None
+        idx = self.relpos(protein['sel_idx']).to(msa_init.device)
+        pair_init += self.embd_pos(idx).unsqueeze(0)
 
         return msa_init, pair_init
 
@@ -530,7 +552,6 @@ class InputEmbedder(nn.Module):
         idx = torch.clamp(idx, min_dis, max_dis) - min_dis
 
         return idx
-
 
 
 class MSAEncoder(nn.Module):
@@ -546,6 +567,7 @@ class MSAEncoder(nn.Module):
                  dropout_p2d,
                  with_column_attn,
                  split_seq,
+                 split_res,
                  ):
 
         super(MSAEncoder, self).__init__()
@@ -559,7 +581,7 @@ class MSAEncoder(nn.Module):
         self.dropout_p2d = dropout_p2d
         self.with_column_attn = with_column_attn
         self.split_seq = split_seq
-
+        self.split_res = split_res
 
         self.msa_encoder = self._make_msa_encoder(num_block=num_block)
 
@@ -575,6 +597,7 @@ class MSAEncoder(nn.Module):
                               dropout_p2d=self.dropout_p2d,
                               with_column_attn=self.with_column_attn,
                               tied_attn=self.tied_attn,
+                              split_res=self.split_res,
                               split_seq=self.split_seq,
                               is_causal=False)
 
@@ -582,7 +605,7 @@ class MSAEncoder(nn.Module):
 
         return nn.Sequential(OrderedDict(layers))
 
-    def forward(self, msa, pair, msa_idx=None):
+    def forward(self, msa, pair):
 
         for layer in self.msa_encoder:
             msa, pair = layer(msa, pair)
@@ -591,7 +614,6 @@ class MSAEncoder(nn.Module):
 
 
 class MaskedMSAHead(nn.Module):
-    """Head for masked language modeling."""
 
     def __init__(self, embed_dim, output_dim):
         super().__init__()
@@ -603,7 +625,6 @@ class MaskedMSAHead(nn.Module):
         self.linear = nn.Linear(embed_dim, output_dim)
 
     def forward(self, x):
-        
         x = x.squeeze(0) 
         x = self.bef_layer_norm(x)
         x = self.dense(x)
@@ -624,7 +645,8 @@ class ConfidenceHead(nn.Module):
                  pair_nhead,
                  dropout_p,
                  dropout_p2d,
-                 split_seq,
+                 split_res,
+                 split_seq=None,
                  no_bins_lddt=50,
                  min_dis=3.25,
                  max_dis=20.75,
@@ -648,6 +670,7 @@ class ConfidenceHead(nn.Module):
                                     dropout_p=dropout_p,
                                     dropout_p2d=dropout_p2d,
                                     with_column_attn=with_column_attn,
+                                    split_res=split_res,
                                     split_seq=split_seq)
 
         self.trans_dis = nn.Linear(no_bins_dis, pair_channel, bias=False)
@@ -661,9 +684,9 @@ class ConfidenceHead(nn.Module):
                                        ) 
 
     def forward(self, seq, pair, coords):
-        seq = seq[:, 1:2, ...].detach()
-        pair = pair.detach()
-        coords = coords[:, 1, ...].detach()
+        seq = copy.deepcopy(seq[:, 1:2, ...].detach())
+        pair = copy.deepcopy(pair.detach())
+        coords = copy.deepcopy(coords[:, 1, ...].detach())
 
         bins = torch.linspace(self.min_dis, self.max_dis, self.no_bin_dis - 1, dtype=coords.dtype, device=coords.device,
                               requires_grad=False, )
@@ -677,7 +700,6 @@ class ConfidenceHead(nn.Module):
 
         for layer in self.evoformer.msa_encoder:
             seq, pair = layer(seq, pair)
-
 
         pae = self.out_pae(pair)
         plddt = self.out_plddt(seq)

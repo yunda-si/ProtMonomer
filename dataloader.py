@@ -37,13 +37,14 @@ class MSAFeature(object):
     def __init__(self,
                  max_token=2 ** 16,
                  max_homolog=8192,
-                 filter = True
+                 filter=True,
+                 maxhamming_bin='./bin/maxhamming',
                  ):
 
         self.max_token = max_token
         self.max_homolog = max_homolog
         self.filter = filter
-        self.maxhamming_bin =  './bin/maxhamming'
+        self.maxhamming_bin = maxhamming_bin
 
     def __call__(self,
                  msa=None,
@@ -56,46 +57,54 @@ class MSAFeature(object):
     def msa_encoding(self, msa):
 
         num_row, num_column = msa.shape
-
         num_sel_msa = min(int(num_row), self.max_homolog) + 1
-
-        sel_row_index = np.random.permutation(num_row)
-        sel_row_index = sel_row_index[sel_row_index!=0]
-        sel_row_index = np.concatenate([np.array([0]), sel_row_index])
-
         upper_num_msa = min(int(self.max_token/num_column), num_sel_msa)
 
         if self.filter:
-            msa = msa[sel_row_index]
-            sim_msa, left_msa = self.filter_msa(msa, 0.5, 0.95, 21, upper_num_msa)
-            msa = np.concatenate([sim_msa, left_msa], 0)[:upper_num_msa]
+            print(msa.shape)
+            sim_msa, left_msa = self.filter_msa(msa, 0.4, 0.9, 21) #0.4
+            if len(sim_msa)>=upper_num_msa:
+                msa = sim_msa[:upper_num_msa]
+            else:
+                sim_msa, left_msa = self.filter_msa(msa, 0.5, 0.95, 21)
+                if len(sim_msa) >= upper_num_msa:
+                    msa = sim_msa[:upper_num_msa]
+                else:
+                    sim_msa, left_msa = self.filter_msa(msa, 0.6, 0.95, 21)
+                    msa = np.concatenate([sim_msa, left_msa], 0)[:upper_num_msa]
         else:
-            msa = msa[sel_row_index][:upper_num_msa]
+            msa = msa[:upper_num_msa]
 
         msa = torch.tensor(msa, dtype=torch.int64)
 
         return msa
 
 
-    def filter_msa(self, msa, gap_cov=0.5, identity=0.95, gap_id=21, max_seq=8192*4):
+    def filter_msa(self, msa, gap_cov=0.5, identity=0.95, gap_id=21):
         msa = torch.from_numpy(msa.copy())
+
         num_seq, num_aa = msa.shape
+        print(msa.shape)
         identity_array = num_aa - torch.cdist(msa.float()[:1], msa.float(), p=0)
-        sel_idx = (torch.sort(identity_array, descending=True).indices)[identity_array!= num_aa]
-        sel_idx = torch.concat([torch.tensor([0]), sel_idx])
+        sel_idx = torch.sort(identity_array, descending=True).indices
+        msa = msa[sel_idx[0]]
+        print(msa.shape)
+
+        sel_idx = torch.sort(torch.sum(msa != gap_id, dim=-1), descending=True).indices
+        sel_idx = torch.tensor([0] + [i for i in sel_idx if i != 0])
         msa = msa[sel_idx]
+
         num_seq, num_aa = msa.shape
+        msa_idx = (torch.sum(msa == gap_id, dim=-1) < num_aa*gap_cov)
+        total_idx = self.maxhamming(msa[msa_idx], identity)
 
-        msa_idx = (torch.sum(msa == gap_id, dim=-1) < num_aa * gap_cov)
-
-        total_idx = self.maxhamming(msa[msa_idx], identity, max_seq)
 
         mask = torch.ones(num_seq, dtype=torch.bool)
         mask[total_idx] = False
 
         return msa[total_idx].cpu().numpy(), msa[mask].cpu().numpy()
 
-    def maxhamming(self, msa, identity, max_seq):
+    def maxhamming(self, msa, identity):
         mapping = [resc.ID_TO_HHBLITS_AA[i] for i in range(22)]
         result = np.array(mapping)[msa.numpy()]
 
@@ -111,11 +120,13 @@ class MSAFeature(object):
                     f.write(f'{seq}\n')
 
             out_file = tempdir / f"{file_name}.idx"
-            os.system(f'{self.maxhamming_bin} -r -i {fasta_file} -o {out_file} -n {max_seq} -t {1-identity} -f index >/dev/null 2>&1')
-            index = torch.from_numpy(np.loadtxt(out_file).astype(np.int_))
-
-            if index.shape == torch.Size([]):
-                index = index.unsqueeze(0)
+            os.system(f'{self.maxhamming_bin} -i {fasta_file} -o {out_file} -n {max(len(msa)-1,1)} -t {1-identity} -f index >/dev/null 2>&1')
+            if os.path.exists(out_file):
+                index = torch.from_numpy(np.loadtxt(out_file).astype(np.int_))
+                if index.shape == torch.Size([]):
+                    index = torch.tensor([0]).int()
+            else:
+                index = torch.tensor([0]).int()
 
         return index
 
@@ -128,13 +139,17 @@ class MonomerDataset(Dataset):
                  max_homolog=8192,
                  filter_msa=True,
                  num_structure_recycle=8,
+                 save_last=True,
+                 maxhamming_bin='./bin/maxhamming'
                  ):
 
         self.targets_list = targets_list
         self.num_structure_recycle = num_structure_recycle
+        self.save_last = save_last
         self.get_msa_feature = MSAFeature(max_token=max_token,
                                           max_homolog=max_homolog,
                                           filter=filter_msa,
+                                          maxhamming_bin=maxhamming_bin,
                                           )
 
     def __getitem__(self, idx):
@@ -149,7 +164,13 @@ class MonomerDataset(Dataset):
                            'atom37_atom_exists':None,
                            'label_seq':None,
                            'peptide_coords':None,
+                           'plddt_idx':None,
                            }
+
+        if self.save_last:
+            monomer_feature['plddt_idx'] = [self.num_structure_recycle-1]
+        else:
+            monomer_feature['plddt_idx'] = [i for i in range(self.num_structure_recycle)]
 
         # msa
         parsed_msa = SeqIO.parse(msa_file, 'fasta')
@@ -162,15 +183,14 @@ class MonomerDataset(Dataset):
         
         # seq
         fasta_seq = homologs_list[0].strip()
-        print(fasta_seq)
         sel_idx = torch.arange(len(fasta_seq))
         monomer_feature['sel_idx'] = sel_idx
         monomer_feature['fasta_seq'] = fasta_seq
         seq_np = np.array([resc.restype_order_with_x[i] for i in fasta_seq])
-        monomer_feature['atom37_atom_exists'] = torch.from_numpy(resc.restype_atom37_mask[seq_np]).long()
+        monomer_feature['atom37_atom_exists'] = torch.from_numpy(resc.RESTYPE_ATOM37_MASK[seq_np]).long()
 
-        # structures
-        peptide_coords = [self.buildpeptide(fasta_seq[sel_idx[0].item():sel_idx[-1].item()+1])]
+        # structure
+        peptide_coords = [self.buildpeptide(fasta_seq)]
         peptide_coords = torch.stack(peptide_coords)/10
         monomer_feature['peptide_coords'] = peptide_coords
 

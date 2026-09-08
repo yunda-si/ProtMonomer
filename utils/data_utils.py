@@ -50,12 +50,13 @@ def compute_plddt(logits: torch.Tensor) -> torch.Tensor:
     return pred_lddt_ca * 100
 
 
-def localrigids(coords37,
+def localrigids(
+                coords37,
                 n_idx=0,
                 ca_idx=1,
                 c_idx=2,
                 eps=1e-8,
-                svd_align=False):
+                ):
     n_coords = coords37[..., n_idx, :]
     ca_coords = coords37[..., ca_idx, :]
     c_coords = coords37[..., c_idx, :]

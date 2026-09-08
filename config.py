@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 Created on Fri Mar 29 14:11:56 2024
-
 @author: yunda_si
 """
 
@@ -29,11 +28,12 @@ def get_cfg():
     config.model.num_atom = 37
     config.model.dropout_p = 0.15
     config.model.dropout_p2d = 0.25
-
     config.model.blocks_confidence = 3
-    
-    config.split_seq = None
-    config.split_atom = None
+
+    config.inference = config_dict.ConfigDict()
+    config.inference.split_seq = None
+    config.inference.split_res = None
+    config.inference.split_atom = None
     
     return config
     

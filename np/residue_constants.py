@@ -19,10 +19,6 @@
 
 import numpy as np
 
-# Distance from one CA to next CA [trans configuration: omega = 180].
-ca_ca = 3.80209737096
-
-
 # A list of atoms (excluding hydrogen) for each AA type. PDB naming convention.
 residue_atoms = {
     "ALA": ["C", "CA", "CB", "N", "O"],
@@ -64,36 +60,6 @@ atom2element = np.zeros((37, 4))
 for atom_idx, atom in enumerate(atom_types):
     ele_idx = element_types.index(atom[:1])
     atom2element[atom_idx, ele_idx] = 1
-
-# A compact atom encoding with 14 columns
-# pylint: disable=line-too-long
-# pylint: disable=bad-whitespace
-restype_name_to_atom14_names = {
-    'ALA': ['N', 'CA', 'C', 'O', 'CB', '',    '',    '',    '',    '',    '',    '',    '',    ''],
-    'ARG': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD',  'NE',  'CZ',  'NH1', 'NH2', '',    '',    ''],
-    'ASN': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'OD1', 'ND2', '',    '',    '',    '',    '',    ''],
-    'ASP': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'OD1', 'OD2', '',    '',    '',    '',    '',    ''],
-    'CYS': ['N', 'CA', 'C', 'O', 'CB', 'SG',  '',    '',    '',    '',    '',    '',    '',    ''],
-    'GLN': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD',  'OE1', 'NE2', '',    '',    '',    '',    ''],
-    'GLU': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD',  'OE1', 'OE2', '',    '',    '',    '',    ''],
-    'GLY': ['N', 'CA', 'C', 'O', '',   '',    '',    '',    '',    '',    '',    '',    '',    ''],
-    'HIS': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'ND1', 'CD2', 'CE1', 'NE2', '',    '',    '',    ''],
-    'ILE': ['N', 'CA', 'C', 'O', 'CB', 'CG1', 'CG2', 'CD1', '',    '',    '',    '',    '',    ''],
-    'LEU': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD1', 'CD2', '',    '',    '',    '',    '',    ''],
-    'LYS': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD',  'CE',  'NZ',  '',    '',    '',    '',    ''],
-    'MET': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'SD',  'CE',  '',    '',    '',    '',    '',    ''],
-    'PHE': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD1', 'CD2', 'CE1', 'CE2', 'CZ',  '',    '',    ''],
-    'PRO': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD',  '',    '',    '',    '',    '',    '',    ''],
-    'SER': ['N', 'CA', 'C', 'O', 'CB', 'OG',  '',    '',    '',    '',    '',    '',    '',    ''],
-    'THR': ['N', 'CA', 'C', 'O', 'CB', 'OG1', 'CG2', '',    '',    '',    '',    '',    '',    ''],
-    'TRP': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD1', 'CD2', 'NE1', 'CE2', 'CE3', 'CZ2', 'CZ3', 'CH2'],
-    'TYR': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD1', 'CD2', 'CE1', 'CE2', 'CZ',  'OH',  '',    ''],
-    'VAL': ['N', 'CA', 'C', 'O', 'CB', 'CG1', 'CG2', '',    '',    '',    '',    '',    '',    ''],
-    'UNK': ['',  '',   '',  '',  '',   '',    '',    '',    '',    '',    '',    '',    '',    ''],
-
-}
-# pylint: enable=line-too-long
-# pylint: enable=bad-whitespace
 
 
 # This is the standard residue order when coding AA type as a number.
@@ -217,64 +183,6 @@ MAP_HHBLITS_AATYPE_TO_OUR_AATYPE = tuple(
 )
 
 
-def _make_standard_atom_mask() -> np.ndarray:
-    """Returns [num_res_types, num_atom_types] mask array."""
-    # +1 to account for unknown (all 0s).
-    mask = np.zeros([restype_num + 1, atom_type_num], dtype=np.int32)
-    for restype, restype_letter in enumerate(restypes):
-        restype_name = restype_1to3[restype_letter]
-        atom_names = residue_atoms[restype_name]
-        for atom_name in atom_names:
-            atom_type = atom_order[atom_name]
-            mask[restype, atom_type] = 1
-    return mask
-
-
-STANDARD_ATOM_MASK = _make_standard_atom_mask()
-
-
-
-def _make_rigid_transformation_4x4(ex, ey, translation):
-    """Create a rigid 4x4 transformation matrix from two axes and transl."""
-    # Normalize ex.
-    ex_normalized = ex / np.linalg.norm(ex)
-
-    # make ey perpendicular to ex
-    ey_normalized = ey - np.dot(ey, ex_normalized) * ex_normalized
-    ey_normalized /= np.linalg.norm(ey_normalized)
-
-    # compute ez as cross product
-    eznorm = np.cross(ex_normalized, ey_normalized)
-    m = np.stack(
-        [ex_normalized, ey_normalized, eznorm, translation]
-    ).transpose()
-    m = np.concatenate([m, [[0.0, 0.0, 0.0, 1.0]]], axis=0)
-    return m
-
-
-# create an array with (restype, atomtype) --> rigid_group_idx
-# and an array with (restype, atomtype, coord) for the atom positions
-# and compute affine transformation matrices (4,4) from one rigid group to the
-# previous group
-restype_atom37_to_rigid_group = np.zeros([21, 37], dtype=int)
-restype_atom37_mask = np.zeros([21, 37], dtype=np.float32)
-restype_atom37_rigid_group_positions = np.zeros([21, 37, 3], dtype=np.float32)
-restype_atom14_to_rigid_group = np.zeros([21, 14], dtype=int)
-restype_atom14_mask = np.zeros([21, 14], dtype=np.float32)
-restype_atom14_rigid_group_positions = np.zeros([21, 14, 3], dtype=np.float32)
-restype_rigid_group_default_frame = np.zeros([21, 8, 4, 4], dtype=np.float32)
-
-
-
-
-def aatype_to_str_sequence(aatype):
-    return ''.join([
-        restypes_with_x[aatype[i]] 
-        for i in range(len(aatype))
-    ])
-
-
-
 def _make_restype_atom37_mask():
   """Mask of which atoms are present for which residue type in atom37."""
   # create the corresponding mask
@@ -287,61 +195,4 @@ def _make_restype_atom37_mask():
       restype_atom37_mask[restype, atom_type] = 1
   return restype_atom37_mask
 
-
-def _make_restype_atom14_mask():
-  """Mask of which atoms are present for which residue type in atom14."""
-  restype_atom14_mask = []
-
-  for rt in restypes:
-    atom_names = restype_name_to_atom14_names[
-        restype_1to3[rt]]
-    restype_atom14_mask.append([(1. if name else 0.) for name in atom_names])
-
-  restype_atom14_mask.append([0.] * 14)
-  restype_atom14_mask = np.array(restype_atom14_mask, dtype=np.float32)
-  return restype_atom14_mask
-
-
-def _make_restype_atom37_to_atom14():
-  """Map from atom37 to atom14 per residue type."""
-  restype_atom37_to_atom14 = []  # mapping (restype, atom37) --> atom14
-  for rt in restypes:
-    atom_names = restype_name_to_atom14_names[
-        restype_1to3[rt]]
-    atom_name_to_idx14 = {name: i for i, name in enumerate(atom_names)}
-    restype_atom37_to_atom14.append([
-        (atom_name_to_idx14[name] if name in atom_name_to_idx14 else 0)
-        for name in atom_types
-    ])
-
-  restype_atom37_to_atom14.append([0] * 37)
-  restype_atom37_to_atom14 = np.array(restype_atom37_to_atom14, dtype=np.int32)
-  return restype_atom37_to_atom14
-
-
-def _make_restype_atom14_to_atom37():
-  """Map from atom14 to atom37 per residue type."""
-  restype_atom14_to_atom37 = []  # mapping (restype, atom14) --> atom37
-  for rt in restypes:
-    atom_names = restype_name_to_atom14_names[
-        restype_1to3[rt]]
-    restype_atom14_to_atom37.append([
-        (atom_order[name] if name else 0)
-        for name in atom_names
-    ])
-  # Add dummy mapping for restype 'UNK'
-  restype_atom14_to_atom37.append([0] * 14)
-  restype_atom14_to_atom37 = np.array(restype_atom14_to_atom37, dtype=np.int32)
-  return restype_atom14_to_atom37
-
-
-
-RESTYPE_ATOM14_TO_ATOM37 = _make_restype_atom14_to_atom37()
-RESTYPE_ATOM37_TO_ATOM14 = _make_restype_atom37_to_atom14()
 RESTYPE_ATOM37_MASK = _make_restype_atom37_mask()
-RESTYPE_ATOM14_MASK = _make_restype_atom14_mask()
-
-# Create mask for existing rigid groups.
-RESTYPE_RIGIDGROUP_MASK = np.zeros([21, 8], dtype=np.float32)
-RESTYPE_RIGIDGROUP_MASK[:, 0] = 1
-RESTYPE_RIGIDGROUP_MASK[:, 3] = 1

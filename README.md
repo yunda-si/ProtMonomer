@@ -54,7 +54,7 @@ weights/
 ```
 
 `stage2.pt` provides better confidence estimation and is recommended for multi-conformation prediction and screening. `stage3.pt` generally provides higher structure accuracy and is recommended for single-conformation prediction and challenging targets. 
-Predicted structures can be refined using `utils/refine.py`. On 45 CASP15 targets, `stage2.pt` achieves a mean TM-score of approximately 0.816, while `stage3.pt` achieves a mean TM-score of approximately 0.828.
+Predicted structures can be refined using `utils/refine.py`. On [45 CASP15 targets](https://drive.google.com/drive/folders/1_d663gCdwh3wGDHHmMXftAm8-hKRx7mV), `stage2.pt` achieves a mean TM-score of approximately 0.816, while `stage3.pt` achieves a mean TM-score of approximately 0.828.
 
 ## Quick start
 

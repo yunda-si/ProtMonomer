@@ -61,7 +61,6 @@ class MSAFeature(object):
         upper_num_msa = min(int(self.max_token/num_column), num_sel_msa)
 
         if self.filter:
-            print(msa.shape)
             sim_msa, left_msa = self.filter_msa(msa, 0.4, 0.9, 21) #0.4
             if len(sim_msa)>=upper_num_msa:
                 msa = sim_msa[:upper_num_msa]
@@ -84,11 +83,9 @@ class MSAFeature(object):
         msa = torch.from_numpy(msa.copy())
 
         num_seq, num_aa = msa.shape
-        print(msa.shape)
         identity_array = num_aa - torch.cdist(msa.float()[:1], msa.float(), p=0)
         sel_idx = torch.sort(identity_array, descending=True).indices
         msa = msa[sel_idx[0]]
-        print(msa.shape)
 
         sel_idx = torch.sort(torch.sum(msa != gap_id, dim=-1), descending=True).indices
         sel_idx = torch.tensor([0] + [i for i in sel_idx if i != 0])

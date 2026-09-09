@@ -34,8 +34,11 @@ pip install torch==2.12.0 torchvision==0.27.0 --index-url https://download.pytor
 Install the remaining dependencies:
 ```bash
 pip install biopython numpy ml-collections PeptideBuilder deepspeed scikit-learn matplotlib
-pip install flash-attn --no-build-isolation # Installation may take a while.
-pip install nvidia-cutlass
+wget https://github.com/NVIDIA/cutlass/archive/refs/tags/v3.5.1.tar.gz
+tar -xzf v3.5.1.tar.gz
+export CUTLASS_PATH="/path/ProtMonomer/cutlass-3.5.1"
+git clone https://github.com/Dao-AILab/flash-attention.git
+python setup.py install
 ```
 
 Verify the attention environment:

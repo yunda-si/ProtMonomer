@@ -34,8 +34,8 @@ pip install torch==2.12.0 torchvision==0.27.0 --index-url https://download.pytor
 Then install the remaining dependencies
 ```bash
 pip install biopython numpy ml-collections PeptideBuilder deepspeed scikit-learn matplotlib
-pip install openmm #pip install openmm[cuda12] | pip install openmm[cuda13]
-pip install flash-attn --no-build-isolation
+pip install openmm # pip install openmm[cuda12] | pip install openmm[cuda13]
+pip install flash-attn --no-build-isolation # Installation may take a while.
 pip install nvidia-cutlass
 ```
 

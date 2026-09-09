@@ -36,13 +36,13 @@ Install the remaining dependencies:
 pip install biopython numpy ml-collections PeptideBuilder deepspeed scikit-learn matplotlib
 wget https://github.com/NVIDIA/cutlass/archive/refs/tags/v3.5.1.tar.gz
 tar -xzf v3.5.1.tar.gz
-export CUTLASS_PATH="/path/ProtMonomer/cutlass-3.5.1"
 git clone https://github.com/Dao-AILab/flash-attention.git
 python setup.py install
 ```
 
 Verify the attention environment:
 ```bash
+export CUTLASS_PATH="/path/ProtMonomer/cutlass-3.5.1"
 python utils/test_attn.py
 ```
 
@@ -101,6 +101,7 @@ python utils/mmseqs_search.py \
 ### Predict one target
 
 ```bash
+export CUTLASS_PATH="/path/ProtMonomer/cutlass-3.5.1"
 python predict_from_msa.py \
       --msa_file ./example/test.a3m \
       --save_path ./results \
@@ -111,6 +112,7 @@ python predict_from_msa.py \
 ### Predict all targets in a directory
 
 ```bash
+export CUTLASS_PATH="/path/ProtMonomer/cutlass-3.5.1"
 python predict_from_msa.py \
       --msa_path ./example \
       --save_path ./results \
@@ -157,6 +159,7 @@ All three default to `0`, which disables chunking. Increasing the degree of chun
 Example:
 
 ```bash
+export CUTLASS_PATH="/path/ProtMonomer/cutlass-3.5.1"
 python predict_from_msa.py \
       --msa_file ./example/test.a3m \
       --save_path ./results \

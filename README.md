@@ -31,17 +31,32 @@ pip install torch==2.12.0 torchvision==0.27.0 --index-url https://download.pytor
 pip install torch==2.12.0 torchvision==0.27.0 --index-url https://download.pytorch.org/whl/cu132
 ```
 
-Then install the remaining dependencies
+Install the remaining dependencies:
 ```bash
 pip install biopython numpy ml-collections PeptideBuilder deepspeed scikit-learn matplotlib
-pip install openmm # pip install openmm[cuda12] | pip install openmm[cuda13]
 pip install flash-attn --no-build-isolation # Installation may take a while.
 pip install nvidia-cutlass
 ```
 
-Test the attention environment:
+Verify the attention environment:
 ```bash
 python utils/test_attn.py
+```
+
+#### Optional dependencies
+
+For structure refinement with `utils/refine.py`:
+```bash
+pip install openmm
+# Alternatively:
+# pip install openmm[cuda12]
+# pip install openmm[cuda13]
+```
+
+For local MSA searching:
+```bash
+conda install bioconda::hhsuite
+conda install bioconda::hmmer
 ```
 
 ### 4. Download model weights
@@ -57,25 +72,47 @@ weights/
 Predicted structures can be refined using `utils/refine.py`. On [45 CASP15 targets](https://drive.google.com/drive/folders/1_d663gCdwh3wGDHHmMXftAm8-hKRx7mV), `stage2.pt` achieves a mean TM-score of approximately 0.816, while `stage3.pt` achieves a mean TM-score of approximately 0.828.
 
 ## Quick start
+### Search for an MSA
+
+ProtMonomer accepts MSAs in `.a3m` format. You can generate an MSA either locally or through the ColabFold server.
+
+#### Local MSA search
+
+```bash
+python utils/search_msa.py \
+      --seq_file ./example/test.fasta \
+      --save_path ./results \
+      --bfd_path /BFD \
+      --uniref90_path /uniref90.fasta \
+      --mgnify_path /mgnify.fa
+```
+
+#### MSA search using the ColabFold server
+
+```bash
+python utils/mmseqs_search.py \
+  --seq_file ./example/test.fasta \
+  --msa_file ./example/test.a3m
+```
 
 ### Predict one target
 
 ```bash
 python predict_from_msa.py \
-  --msa_file ./example/test.a3m \
-  --save_path ./results \
-  --weight_file ./weights/stage3.pt \
-  --device cuda:0
+      --msa_file ./example/test.a3m \
+      --save_path ./results \
+      --weight_file ./weights/stage3.pt \
+      --device cuda:0
 ```
 
 ### Predict all targets in a directory
 
 ```bash
 python predict_from_msa.py \
-  --msa_path ./example \
-  --save_path ./results \
-  --weight_file ./weights/stage3.pt \
-  --device cuda:0
+      --msa_path ./example \
+      --save_path ./results \
+      --weight_file ./weights/stage3.pt \
+      --device cuda:0
 ```
 
 `--msa_file` and `--msa_path` are mutually exclusive. Input files should be in `.a3m` format,
@@ -118,19 +155,18 @@ Example:
 
 ```bash
 python predict_from_msa.py \
-  --msa_file ./example/test.a3m \
-  --save_path ./results \
-  --weight_file ./weights/stage3.pt \
-  --device cuda:0 \
-  --split_res 128 \
-  --split_seq 128 \
-  --split_atom 2 \
-  --num_iter 8
+      --msa_file ./example/test.a3m \
+      --save_path ./results \
+      --weight_file ./weights/stage3.pt \
+      --device cuda:0 \
+      --split_res 128 \
+      --split_seq 128 \
+      --split_atom 2 \
+      --num_iter 8
 ```
 
 ## Predicting multiple conformations
-Generate sub-MSAs using [AF-Cluster](https://github.com/HWaymentSteele/AF_Cluster), 
-[CF-Random](https://github.com/ncbi/CF-random_software), or random downsampling, and then predict structures from each sampled MSA. 
+Generate sub-MSAs using [AF-Cluster](https://github.com/HWaymentSteele/AF_Cluster) or random downsampling, and then predict structures from each sampled MSA. 
 Generated structures can be clustered and visualized with `utils/sample.py`.
 
 
@@ -146,6 +182,31 @@ Generated structures can be clustered and visualized with `utils/sample.py`.
 }
 ```
 
-## Contact
+If you use the ColabFold server to search for MSAs, please also cite:
+```bibtex
+@article{Mirdita2022ColabFold,
+  title   = {ColabFold: making protein folding accessible to all},
+  author  = {Mirdita, M. and Schütze, K. and Moriwaki, Y. and others},
+  journal = {Nat Methods},
+  volume  = {19},
+  pages   = {679--682},
+  year    = {2022},
+  doi     = {10.1038/s41592-022-01488-1}
+}
+```
 
+If you use AF-Cluster for sub-MSA generation, please also cite:
+```bibtex
+@article{WaymentSteele2024AFCluster,
+  title   = {Predicting multiple conformations via sequence clustering and AlphaFold2},
+  author  = {Wayment-Steele, H. K. and Ojoawo, A. and Otten, R. and others},
+  journal = {Nature},
+  volume  = {625},
+  pages   = {832--839},
+  year    = {2024},
+  doi     = {10.1038/s41586-023-06832-9}
+}
+```
+
+## Contact
 For bug reports, feature requests, and usage questions, please open a GitHub issue or contact [yunda_si@ucas.edu.cn](mailto:yunda_si@ucas.edu.cn) or [lnchen@sjtu.edu.cn](mailto:lnchen@sjtu.edu.cn).

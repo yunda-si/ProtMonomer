@@ -371,7 +371,7 @@ int main(int argc, char* argv[]) {
     bool verbose = false;
     bool random_seed = false;
     double min_dist_threshold = 0.0;
-    string output_format = "msa"; // 默认输出FASTA格式
+    string output_format = "msa";
 
 
     for (int i = 1; i < argc; ++i) {

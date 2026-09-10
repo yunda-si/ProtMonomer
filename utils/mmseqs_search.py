@@ -81,8 +81,8 @@ def mmseqs_msa_search(
                 msa = f.read().decode()
                 msa = "\n".join(
                                 line if line.startswith(">") else "".join(c for c in line if not c.islower())
-                                for line in msa.split("\n")
-                                )
+                                for line in msa.split("\n")[:-1]
+                                )+"\n"
                 ff.write(msa)
         print("MSA saved:",msa_file)
 

@@ -72,7 +72,7 @@ weights/
 ```
 
 `stage2.pt` provides better confidence estimation and is recommended for multi-conformation prediction and screening. `stage3.pt` generally provides higher structure accuracy and is recommended for single-conformation prediction and challenging targets. 
-Predicted structures can be refined using `utils/refine.py`. On [45 CASP15 targets](https://drive.google.com/drive/folders/1_d663gCdwh3wGDHHmMXftAm8-hKRx7mV), `stage2.pt` achieves a mean TM-score of approximately 0.816, while `stage3.pt` achieves a mean TM-score of approximately 0.828.
+Predicted structures can be refined using `utils/refine.py`. On [45 CASP15 targets](https://drive.google.com/drive/folders/1_d663gCdwh3wGDHHmMXftAm8-hKRx7mV), `stage2.pt` achieves a mean TM-score of approximately 0.821, while `stage3.pt` achieves a mean TM-score of approximately 0.828.
 
 ## Quick start
 ### Search for an MSA
@@ -140,7 +140,7 @@ and the first sequence is treated as the query sequence.
 | `--split_seq` |      `0` |    No    | Chunk size along the MSA sequence dimension. `0` disables chunking.            |
 | `--split_res` |      `0` |    No    | Chunk size along residue dimensions. `0` disables chunking.                    |
 | `--split_atom` |      `0` |    No    | Chunk size along atom dimensions. `0` disables chunking.                       |
-| `--num_iter` |      `8` |    No    | Number of structure-recycling iterations.                                      |
+| `--num_iter` |      `16` |    No    | Number of structure-recycling iterations.                                      |
 | `--filter_msa` | disabled |    No    | Enable MSA filtering. Requires `./bin/maxhamming`.           |
 | `--max_homolog` |   `8192` |    No    | Maximum MSA depth.                                         |
 | `--last` | disabled |    No    | Evaluate confidence only at the final recycling iteration. |

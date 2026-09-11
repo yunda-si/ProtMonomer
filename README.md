@@ -215,4 +215,4 @@ If you use AF-Cluster for sub-MSA generation, please also cite:
 ```
 
 ## Contact
-For bug reports, feature requests, and usage questions, please open a GitHub issue or contact [yunda_si@ucas.edu.cn](mailto:yunda_si@ucas.edu.cn) or [lnchen@sjtu.edu.cn](mailto:lnchen@sjtu.edu.cn).
+For bug reports, feature requests, and usage questions, please open a GitHub issue or contact [yunda_si@ucas.edu.cn](mailto:yunda_si@ucas.edu.cn).

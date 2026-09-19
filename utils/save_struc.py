@@ -15,7 +15,6 @@ from np import residue_constants as resc
 pdbio = PDBIO()
 mmcifio = MMCIFIO()
 
-
 def set_residue(coords, bfactor, res_name_3, save_idx, segid=' '):
     residue = Residue((' ', save_idx, ' '), res_name_3, segid)
     for atom_name in resc.residue_atoms[res_name_3]:

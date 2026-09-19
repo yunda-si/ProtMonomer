@@ -76,7 +76,7 @@ def predict(cfg, dataloader):
         pred_lddts = compute_plddt(preds['pred_plddts']).cpu()
         idx_maxplddt = torch.argmax(torch.mean(pred_lddts, dim=[1, 2, 3])).item()
 
-        save_file = os.path.join(entry_path, f'{seed}_{num_msa}_{weight_name}.pdb')
+        save_file = os.path.join(entry_path, f'{seed}_{num_msa}_{weight_name}.{cfg.ftype}')
 
         f = cpu_pool.submit(cpu_store,
                             pred_coords[idx_maxplddt,0],
